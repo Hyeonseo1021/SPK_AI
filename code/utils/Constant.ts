@@ -1,0 +1,1 @@
+export const COOKIE_NAME = "auth_token" //쿠키 이름을 저장하는 변수

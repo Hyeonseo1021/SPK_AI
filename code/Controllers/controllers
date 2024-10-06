@@ -1,0 +1,340 @@
+import { Request, Response, NextFunction } from "express";
+import User from "../models/User.js";
+import { configureOpenAI, ModelName } from "../config/openai.js";
+import OpenAI from "openai";
+import { saveModel, loadModel, deleteModel } from "../utils/modelStorage.js";
+import { fineTuneModel, saveTrainingDataToFile, uploadTrainingData } from "../utils/fineTuneModel.js"
+
+ //사용자 메세지 처리
+export const generateChatCompletion = async ( //사용자가 보낸 메시지를 기반으로 OpenAI API를 호출하여 응답을 생성,결과를 데이터베이스에 저장, 클라이언트에게 반환하는 기능
+	req: Request,       
+	res: Response,      
+	next: NextFunction
+) => {
+	try {
+		const { message } = req.body;
+
+		const user = await User.findById(res.locals.jwtData.id);
+		if (!user) {
+			return res.status(401).json("User not registered / token malfunctioned");
+		}
+
+		// Add the user's message to the conversation
+		const conversation = user.conversations[user.conversations.length - 1]; //마지막 대화 호출
+
+		// Prepare messages for OpenAI API
+		const chats = conversation.chats.map(({ role, content }) => ({      
+			role,
+			content,
+		})) ;
+		chats.push({ content: message, role: "user" });     //새로운 메세지를 현재 대화에 추가
+
+		conversation.chats.push({ content: message, role: "user" });    //대화내역 업데이트
+		// send all chats with new ones to OpenAI API
+		const config = configureOpenAI();
+		const openai = new OpenAI(config);  //openai api 초기화
+
+		// make request to openAi
+		// get latest response
+		const chatResponse = await openai.chat.completions.create({
+			model: ModelName,
+			messages: chats as OpenAI.Chat.ChatCompletionMessageParam[],
+		});     //응답요청
+
+		// push latest response to db
+		conversation.chats.push(chatResponse.choices[0].message);
+		await user.save();
+
+		return res.status(200).json({ chats: conversation.chats });
+	} catch (error) {
+		console.log(error);
+		return res.status(500).json({ message: error.message });
+	}
+};      //openai api 에게 받은 응답을 dB에 저장
+
+export const getAllConversations = async (  //사용자의 모든 대화를 가져오는 API 엔드포인트를 구현
+	req: Request,
+	res: Response,
+	next: NextFunction
+) => {
+	try {
+		const user = await User.findById(res.locals.jwtData.id); // get variable stored in previous middleware
+            //mongoDB에서 사용자 정보조회
+		if (!user)
+			return res.status(401).json({
+				message: "ERROR",
+				cause: "User doesn't exist or token malfunctioned",
+			}); //사용자 아니면 에러
+
+		if (user._id.toString() !== res.locals.jwtData.id) {    //사용자 ID와 데이터에 저장된 ID일치 여부 확인
+			return res
+				.status(401) //일치하지 않을때 오류코드
+				.json({ message: "ERROR", cause: "Permissions didn't match" }); 
+		}
+		return res.status(200).json({ message: "OK", conversations: user.conversations }); //일치 OK메세지 출력
+	} catch (err) {
+		console.log(err);
+		return res.status(200).json({ message: "ERROR", cause: err.message });//불일치 ERROR메세지 출력
+	}
+};
+
+export const deleteAllConversations = async ( //대화삭제?
+	req: Request,
+	res: Response,
+	next: NextFunction
+) => {
+	try {
+		const user = await User.findById(res.locals.jwtData.id); // get variable stored in previous middleware
+        
+		if (!user)
+			return res.status(401).json({
+				message: "ERROR",
+				cause: "User doesn't exist or token malfunctioned",
+			});
+
+		if (user._id.toString() !== res.locals.jwtData.id) {
+			return res
+				.status(401)
+				.json({ message: "ERROR", cause: "Permissions didn't match" });
+		}
+
+        //@ts-ignore
+        user.conversations = [];
+        await user.save()
+		return res.status(200).json({ message: "OK", conversations: user.conversations });
+	} catch (err) {
+		console.log(err);
+		return res.status(200).json({ message: "ERROR", cause: err.message });
+	}
+};
+
+export const startNewConversation = async ( //새로운 대화
+	req: Request,
+	res: Response,
+	next: NextFunction
+) => {
+	try {
+		const user = await User.findById(res.locals.jwtData.id);
+
+		if (!user)
+			return res.status(401).json({
+				message: "ERROR",
+				cause: "User doesn't exist or token malfunctioned",
+			});
+		
+		// Validate if the last conversation is empty
+		const lastConversation = user.conversations[user.conversations.length - 1]; //마지막 대화 호출
+		if (lastConversation && lastConversation.chats.length === 0) {  //새로운 대화 생성전 마지막 대화에 채팅이 있는지 확인
+			return res.status(400).json({
+				message: "ERROR",
+				cause: "The last conversation is still empty. Please add messages before creating a new conversation.",
+			});
+		}
+
+		user.conversations.push({ chats: [] }); //대화 시작
+		await user.save();
+
+		return res.status(200).json({ message: "New conversation started", 
+					conversation: user.conversations[user.conversations.length - 1]  });
+	} catch (err) {
+		console.log(err);
+		return res.status(500).json({ message: "ERROR", cause: err.message });
+	}
+};
+
+export const startNewConversationwith = async (
+	req: Request,
+	res: Response,
+	next: NextFunction
+) => {
+	try {
+		const { message } = req.body; //메세지 존재 확인?
+
+		const user = await User.findById(res.locals.jwtData.id);
+		if (!user) {
+			return res.status(401).json("User not registered / token malfunctioned");
+		}
+		// Validate if the last conversation is empty
+			const lastConversation = user.conversations[user.conversations.length - 1];
+			if (lastConversation && lastConversation.chats.length === 0) {
+				return res.status(400).json({
+					message: "ERROR",
+					cause: "The last conversation is still empty. Please add messages before creating a new conversation.",
+				});
+			}
+		user.conversations.push({ chats: [] });
+		// Add the user's message to the conversation
+		const conversation = user.conversations[user.conversations.length - 1];
+
+		// Prepare messages for OpenAI API
+		const chats = conversation.chats.map(({ role, content }) => ({
+			role,
+			content,
+		})) ;
+		chats.push({ content: message, role: "user" });
+
+		conversation.chats.push({ content: message, role: "user" });
+		// send all chats with new ones to OpenAI API
+		const config = configureOpenAI();
+		const openai = new OpenAI(config);
+
+		// make request to openAi
+		// get latest response
+		const chatResponse = await openai.chat.completions.create({
+			model: ModelName,
+			messages: chats as OpenAI.Chat.ChatCompletionMessageParam[],
+		});
+
+		// push latest response to db
+		conversation.chats.push(chatResponse.choices[0].message);
+		await user.save();
+
+		return res.status(200).json({ conversation: conversation });
+	} catch (error) {
+		console.log(error);
+		return res.status(500).json({ message: error.message });
+	}
+};
+
+export const getConversation = async ( //대화 가져오기
+	req: Request,
+	res: Response,
+	next: NextFunction
+) => {
+	try {
+		const user = await User.findById(res.locals.jwtData.id);
+		const { conversationId } = req.params;      //사용자 확인후 특정대화 검색
+
+		if (!user) {    //유저가 아닐시
+			return res.status(401).json({
+				message: "ERROR",
+				cause: "User doesn't exist or token malfunctioned",
+			});
+		}
+
+		const conversation = user.conversations.id(conversationId);
+		if (!conversation) {        //대화가 없을시?
+			return res.status(404).json({
+				message: "ERROR",
+				cause: "Conversation not found",
+			});
+		}
+
+		return res.status(200).json({ message: "OK", conversation });
+	} catch (err) {
+		console.log(err);
+		return res.status(500).json({ message: "ERROR", cause: err.message });
+	}
+};
+
+export const deleteConversation = async ( //특정 대화 삭제?
+	req: Request,
+	res: Response,
+	next: NextFunction
+) => {
+	try {
+		const user = await User.findById(res.locals.jwtData.id);
+		const { conversationId } = req.params;
+
+		if (!user) {
+			return res.status(401).json({
+				message: "ERROR",
+				cause: "User doesn't exist or token malfunctioned",
+			});
+		}
+
+		const conversation = user.conversations.id(conversationId);
+		if (!conversation) {
+			return res.status(404).json({
+				message: "ERROR",
+				cause: "Conversation not found",
+			});
+		}
+
+		// Remove the conversation
+		user.conversations.pull(conversationId);
+		await user.save();
+
+		return res.status(200).json({ message: "OK", conversations: user.conversations });
+	} catch (err) {
+		console.log(err);
+		return res.status(500).json({ message: "ERROR", cause: err.message });
+	}
+};
+
+export const createCustomModel = async (    //대화 모델 만들기, 파인튜닝?
+	req: Request,
+	res: Response,
+	next: NextFunction) => {
+	try {
+		const userId = res.locals.jwtData.id;
+		const { trainingData, modelName } = req.body;
+        const trainingFilePath = await saveTrainingDataToFile(trainingData);
+        const trainingFileId = await uploadTrainingData(trainingFilePath);
+	  	const fineTunedModel = await fineTuneModel(trainingFileId);
+  
+	  	saveModel(userId, fineTunedModel, modelName);
+  
+	  	res.status(201).json({ message: "Model fine-tuned and saved", model: fineTunedModel, trainingFileId });
+	} catch (err) {
+	  	res.status(500).json({ error: err.message });
+	}
+  };
+
+export const deleteCustomModel = async (    //모델 삭제
+	req: Request,
+	res: Response,
+	next: NextFunction) => {
+	try {
+		const userId = res.locals.jwtData.id;
+	  	const { modelId } = req.params;
+	  	deleteModel(userId, modelId);
+
+	  	res.status(200).json({ message: "Model deleted" });
+	} catch (err) {
+	  	res.status(500).json({ error: err.message });
+	}
+  };
+
+export const getCustomModels = async (      //모델 불러오기
+	req: Request,       
+	res: Response,
+	next: NextFunction
+) => {
+	try {
+		const user = await User.findById(res.locals.jwtData.id); // get variable stored in previous middleware (이전에 저장된 변수 불러오기)
+        
+		if (!user)
+			return res.status(401).json({
+				message: "ERROR",
+				cause: "User doesn't exist or token malfunctioned",
+			});
+
+		if (user._id.toString() !== res.locals.jwtData.id) {
+			return res
+				.status(401)
+				.json({ message: "ERROR", cause: "Permissions didn't match" });
+		}
+		return res.status(200).json({ message: "OK", CustomModels: user.CustomModels });
+	} catch (err) {
+		console.log(err);
+		return res.status(200).json({ message: "ERROR", cause: err.message });
+	}
+};
+
+export const getModelbyId = async (     //모델 완성?
+	req: Request,
+	res: Response,
+	next: NextFunction
+) => {
+	try {
+		const userId = res.locals.jwtData.id;
+		const { modelId } = req.params;
+		const model = await loadModel(userId, modelId);
+
+		return res.status(200).json({ message: "OK", model });
+	} catch (err) {
+		console.log(err);
+		return res.status(500).json({ message: "ERROR", cause: err.message });
+	}
+};
