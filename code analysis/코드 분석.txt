@@ -1,0 +1,24 @@
+modelStorage.ts
+
+
+1. saveModel 함수
+  
+   기능: 사용자의 CustomModels에 새로운 모델을 저장하거나, 이미 같은 이름의 모델이 있을 경우 해당 모델 데이터를 업데이트하는 기능을 합니다.
+
+   세부 동작: userId를 사용하여 User 모델에서 사용자를 찾습니다. 만약 사용자가 존재하지 않으면 "User not found" 에러를 발생시킵니다. CustomModels 배열에서 주어진 modelName을 가진 모델이 이미 있는지 확인합니다. 
+                 같은 modelName을 가진 모델이 있으면 모델 데이터를 업데이트하고, 없으면 새로운 모델 데이터를 추가합니다. 변경된 데이터를 user.save()를 통해 저장합니다. 오류가 발생하면 해당 오류 메시지를 포함한 에러를 던집니다
+
+
+2. loadModel 함수
+  
+   기능: 사용자의 CustomModels에서 특정 모델을 불러오는 기능을 합니다.
+
+   세부 동작: userId를 사용하여 User 모델에서 사용자를 찾습니다. 사용자가 존재하지 않으면 "User not found" 에러를 발생시킵니다. 사용자의 CustomModels 배열에서 주어진 modelId를 가진 모델을 찾습니다.
+                 모델이 없으면 "Model not found" 에러를 발생시키고 모델을 반환합니다. 오류가 발생하면 해당 오류 메시지를 포함한 에러를 던집니다
+
+3. deleteModel 함수
+  
+  기능: 사용자의 CustomModels에서 특정 모델을 삭제하는 기능을 합니다.
+
+  세부 동작: userId를 사용하여 User 모델에서 사용자를 찾습니다. 사용자가 존재하지 않으면 "User not found" 에러를 발생시킵니다. 사용자의 CustomModels 배열에서 주어진 modelId를 가진 모델의 인덱스를 찾습니다.
+                모델이 없으면 "Model not found" 에러를 발생시킵니다. 모델을 splice를 사용하여 배열에서 제거합니다. 변경된 데이터를 user.save()를 통해 저장합니다. 오류가 발생하면 해당 오류 메시지를 포함한 에러를 던집니다.
