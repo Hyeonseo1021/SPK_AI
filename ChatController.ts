@@ -1,3 +1,4 @@
+//enerateChatCompletion 수정, readline 추가하여 질문 입력 (추후 whisper통한 음성 파일 받을 수 있도록 수정)
 import readline from 'readline';
 import User from "../models/User.js";
 import { configureOpenAI, ModelName } from "../config/openai.js";
